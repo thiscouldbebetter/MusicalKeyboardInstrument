@@ -394,7 +394,7 @@ class MusicalKeyboard
 
 	isRecording()
 	{
-		return (this.recordingStartTime != null);
+		return (this.recordingInProgress != null);
 	}
 
 	pitchInHertzForIndex(pitchIndex)
@@ -522,7 +522,7 @@ class MusicalKeyboard
 
 			var now = new Date();
 			var millisecondsSinceRecordingStarted =
-				now - this.recordingStartTime;
+				now - this.recordingInProgress.timeStarted;
 
 			var noteInProgress = new Note
 			(
@@ -541,17 +541,22 @@ class MusicalKeyboard
 		{
 			if (note != null)
 			{
+				var recording = this.recordingInProgress;
+				var recordingStartTime = recording.timeStarted;
 				var now = new Date();
 				var millisecondsSinceRecordingStarted =
-					now - this.recordingStartTime;
+					now - recordingStartTime;
 				var durationInMilliseconds =
 					millisecondsSinceRecordingStarted
 					- note.millisecondsSinceRecordingStarted;
 				note.durationInMilliseconds = durationInMilliseconds;
-				this.notesRecorded.push(note);
+				this.recordingInProgress.noteAdd(note);
 
 				var notesRecordedAsString =
-					this.notesRecorded.map(x => x.toStringForRecording() ).join(";");
+					this.recordingInProgress.notes.map
+					(
+						x => x.toStringForRecording()
+					).join(";");
 				var d = document;
 				var textareaRecording = d.getElementById("textareaRecording");
 				textareaRecording.value = notesRecordedAsString;
@@ -604,12 +609,11 @@ class MusicalKeyboard
 	{
 		if (this.isRecording())
 		{
-			this.recordingStartTime = null;
+			this.recordingInProgress = null;
 		}
 		else
 		{
-			this.recordingStartTime = new Date();
-			this.notesRecorded = [];
+			this.recordingInProgress = new Song();
 		}
 	}
 
@@ -717,6 +721,21 @@ class Note
 		return returnValue;
 	}
 }
+
+class Song
+{
+	constructor()
+	{
+		this.timeStarted = new Date();
+		this.notes = [];
+	}
+
+	noteAdd(noteToAdd)
+	{
+		this.notes.push(noteToAdd);
+	}
+}
+
 </script>
 
 </body>
