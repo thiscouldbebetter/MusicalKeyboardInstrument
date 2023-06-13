@@ -18,13 +18,58 @@
 	</p>
 
 	<div>
-		<label>Voice:</label>
-		<select id="selectVoiceName" onchange="selectVoiceName_Changed(this)" >
-			<option>Sine</option>
-			<option>Square</option>
-			<option>Sawtooth</option>
-			<option>Triangle</option>
-		</select>
+		<label>Instrument:</label>
+
+		<div>
+			<label>Voice:</label>
+			<select id="selectVoiceName" onchange="selectVoiceName_Changed(this)" >
+				<option>Sine</option>
+				<option>Square</option>
+				<option>Sawtooth</option>
+				<option>Triangle</option>
+			</select>
+		</div>
+
+		<div>
+			<label>Attack (ms):</label>
+			<input
+				id="inputAttack"
+				type="number" min="0" max="1000"
+				value="100"
+				onchange="inputAttack_Changed(this)"
+			/>
+		</div>
+
+		<div>
+			<label>Decay (ms):</label>
+			<input
+				id="inputDecay"
+				type="number" min="0" max="1000"
+				value="100"
+				onchange="inputDecay_Changed(this)"
+			/>
+		</div>
+
+		<div>
+			<label>Sustain (%):</label>
+			<input
+				id="inputSustain"
+				type="number" min="0" max="100"
+				value=".5"
+				onchange="inputSustain_Changed(this)"
+			/>
+		</div>
+
+		<div>
+			<label>Release (ms):</label>
+			<input
+				id="inputRelease"
+				type="number" min="0" max="500"
+				value="1000"
+				onchange="inputRelease_Changed(this)"
+			/>
+		</div>
+
 	</div>
 
 	<div>
@@ -110,7 +155,7 @@ function body_KeyDown(event)
 		// because the keydown and keyup events
 		// for the primary key and Shift causes problems.
 		// So, pressing Escape allows a way to reset things.
-		musicalKeyboard.channelsAllStop();
+		musicalKeyboard.channelsAllSilence();
 	}
 	else if (key == "PageDown")
 	{
@@ -234,7 +279,7 @@ function inputVolumeAsPercentageOfMax_Changed(inputVolumeAsPercentageOfMax)
 function selectVoiceName_Changed(selectVoiceName)
 {
 	var musicalKeyboard = MusicalKeyboard.Instance();
-	musicalKeyboard.voiceNameSet(selectVoiceName.value);
+	musicalKeyboard.instrument.voiceNameSet(selectVoiceName.value);
 }
 
 // Classes.
@@ -265,8 +310,8 @@ class Channel
 	(
 		pitchInHertz,
 		volumeAsFractionOfMax,
-		startInSeconds,
-		endInSeconds
+		attackStartInSeconds,
+		releaseStartInSeconds
 	)
 	{
 		this.oscillator.frequency.setValueAtTime
@@ -274,24 +319,107 @@ class Channel
 			pitchInHertz, startInSeconds
 		);
 
-		this.gain.gain.setValueAtTime
+		var musicalKeyboard = MusicalKeyboard.Instance;
+		var instrument = musicalKeyboard.instrument;
+		var millisecondsPerSecond = 1000;
+
+		var peakInSeconds =
+			attackStartInSeconds
+			+
+			(
+				instrument.millisecondsFromZeroToPeakVolume
+				/ millisecondsPerSecond
+			);
+
+		var sustainStartInSeconds =
+			peakInSeconds
+			+
+			(
+				instrument.millisecondsFromPeakToSustainVolume
+				/ millisecondsPerSecond
+			);
+
+		var releaseEndInSeconds =
+			releaseStartInSeconds
+			+
+			(
+				instrument.millisecondsFromReleaseToZeroVolume
+				/ millisecondsPerSecon
+			);
+
+		var volumePeak = volumeAsFractionOfMax;
+		var volumeSustain =
+			volumePeak
+			* instrument.sustainVolumeAsFractionOfPeak;
+
+		var gain = this.gain.gain;
+
+		gain.setValueAtTime
 		(
-			volumeAsFractionOfMax, startInSeconds
+			0, attackStartInSeconds
 		);
 
-		this.gain.gain.setValueAtTime
+		gain.setValueAtTime
 		(
-			0, endInSeconds
+			volumePeak, peakInSeconds
+		);
+
+		gain.setValueAtTime
+		(
+			volumeSustain, sustainStartInSeconds
+		);
+
+		gain.setValueAtTime
+		(
+			volumeSustain, releaseInSeconds
+		);
+
+		gain.setValueAtTime
+		(
+			0, releaseEndInSeconds
 		);
 	}
 
-	stopWithAudioContext(audioContext)
+	releaseWithMusicalKeyboard(musicalKeyboard)
 	{
-		var offsetInSeconds = audioContext.currentTime;
+		var instrument = musicalKeyboard.instrument;
+		var audioContext = musicalKeyboard.audio;
 
-		this.gain.gain.setValueAtTime
+		var releaseStartInSeconds = audioContext.currentTime;
+		var releaseEndInSeconds =
+			releaseStartInSeconds
+			+
+			(
+				instrument.millisecondsFromReleaseToZeroVolume
+				/ 1000
+			);
+
+		var sustainVolume =
+			musicalKeyboard.volumeAsFractionOfMax
+			* instrument.sustainVolumeAsFractionOfPeak;
+
+		var gain = this.gain.gain;
+
+		gain.setValueAtTime
 		(
-			0, offsetInSeconds
+			sustainVolume, releaseStartInSeconds
+		);
+
+		gain.setValueAtTime
+		(
+			0, releaseEndInSeconds
+		);
+
+		this.noteInProgress = null;
+	}
+
+	silenceWithMusicalKeyboard(musicalKeyboard)
+	{
+		var gain = this.gain.gain;
+
+		gain.setValueAtTime
+		(
+			0, audioContext.currentTime
 		);
 
 		this.noteInProgress = null;
@@ -335,17 +463,46 @@ class InputTracker
 	}
 }
 
-class MusicalKeyboard
+class Instrument
 {
 	constructor
 	(
 		voiceName,
+		millisecondsFromZeroToPeakVolume,
+		millisecondsFromPeakToSustainVolume,
+		sustainVolumeAsFractionOfPeak,
+		millisecondsFromReleaseToZeroVolume,
+	)
+	{
+		this.voiceName = voiceName || "sine";
+		this.millisecondsFromZeroToPeakVolume =
+			millisecondsFromZeroToPeakVolume || 0;
+		this.millisecondsFromPeakToSustainVolume =
+			millisecondsFromPeakToSustainVolume || 0;
+		this.sustainVolumeAsFractionOfPeak =
+			sustainVolumeAsFractionOfPeak || 1;
+		this.millisecondsFromReleaseToZeroVolume
+			= millisecondsFromReleaseToZeroVolume || 0;
+	}
+
+	static default()
+	{
+		//return new Instrument("sine", 1000, 1000, .1, 5000);
+		return new Instrument();
+	}
+}
+
+class MusicalKeyboard
+{
+	constructor
+	(
+		instrument,
 		volumeAsFractionOfMax,
 		notesSimultaneousCount,
 		semitonesToTranspose
 	)
 	{
-		this.voiceName = voiceName || "Sine";
+		this.instrument = instrument || Instrument.default();
 		this.volumeAsFractionOfMax = volumeAsFractionOfMax || .1;
 		this.notesSimultaneousCount = notesSimultaneousCount || 12;
 		this.semitonesToTranspose = semitonesToTranspose || 0;
@@ -367,9 +524,9 @@ class MusicalKeyboard
 		return MusicalKeyboard._instance;
 	}
 
-	channelsAllStop()
+	channelsAllSilence()
 	{
-		this.channels.forEach(x => x.stopWithAudioContext(this.audio) );
+		this.channels.forEach(x => x.silenceWithMusicalKeyboard(this) );
 	}
 
 	initialize()
@@ -383,7 +540,7 @@ class MusicalKeyboard
 			var channel =
 				Channel.fromAudioContextAndVoiceName
 				(
-					this.audio, this.voiceName
+					this.audio, this.instrument.voiceName
 				);
 
 			channels.push(channel);
@@ -495,10 +652,9 @@ class MusicalKeyboard
 			return;
 		}
 
-
 		this.noteRecordIfRecording(channelToStop.noteInProgress);
 
-		channelToStop.stopWithAudioContext(this.audio);
+		channelToStop.releaseWithMusicalKeyboard(this);
 	}
 
 	noteWithPitchInHertzPlayOnChannel(pitchInHertz, channelIndex)
@@ -507,22 +663,15 @@ class MusicalKeyboard
 		{
 			var channel = this.channels[channelIndex];
 
-			var oscillator = channel.oscillator;
-			var offsetInSeconds = this.audio.currentTime;
-			oscillator.frequency.setValueAtTime
-			(
-				pitchInHertz, offsetInSeconds
-			);
+			// Record the note.
 
-			var gain = channel.gain;
-			gain.gain.setValueAtTime
-			(
-				this.volumeAsFractionOfMax, offsetInSeconds
-			);
-
-			var now = new Date();
+			var isRecording = this.isRecording();
 			var millisecondsSinceRecordingStarted =
-				now - this.recordingInProgress.timeStarted;
+			(
+				this.isRecording()
+				? new Date - this.recordingInProgress.timeStarted
+				: null
+			);
 
 			var noteInProgress = new Note
 			(
@@ -532,6 +681,56 @@ class MusicalKeyboard
 			);
 
 			channel.noteInProgress = noteInProgress;
+
+			// Actually play it.
+
+			var oscillator = channel.oscillator;
+			var attackStartInSeconds = this.audio.currentTime;
+			oscillator.frequency.setValueAtTime
+			(
+				pitchInHertz, attackStartInSeconds
+			);
+
+			var instrument = this.instrument;
+			var millisecondsPerSecond = 1000;
+
+			var peakInSeconds =
+				attackStartInSeconds
+				+
+				(
+					instrument.millisecondsFromZeroToPeakVolume
+					/ millisecondsPerSecond
+				);
+
+			var sustainStartInSeconds =
+				peakInSeconds
+				+
+				(
+					instrument.millisecondsFromPeakToSustainVolume
+					/ millisecondsPerSecond
+				);
+
+			var volumePeak = this.volumeAsFractionOfMax;
+			var volumeSustain =
+				volumePeak
+				* instrument.sustainVolumeAsFractionOfPeak;
+
+			var gain = channel.gain.gain;
+
+			gain.setValueAtTime
+			(
+				0, attackStartInSeconds
+			);
+
+			gain.setValueAtTime
+			(
+				volumePeak, peakInSeconds
+			);
+
+			gain.setValueAtTime
+			(
+				volumeSustain, sustainStartInSeconds
+			);
 		}
 	}
 
@@ -619,7 +818,7 @@ class MusicalKeyboard
 
 	voiceNameSet(value)
 	{
-		this.voiceName = value;
+		this.instrument.voiceName = value;
 		this.channels.forEach(x => x.voiceNameSet(value) );
 		return this;
 	}
